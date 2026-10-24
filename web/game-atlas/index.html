@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>超級井字棋 · 千局棋譜圖譜</title>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="engine.js"></script><script defer src="data.js"></script><script defer src="app.js"></script>
+</head>
+<body>
+  <header class="masthead"><div class="brand-mark" aria-hidden="true">○<span>×</span></div><div><p class="eyebrow">MENACE RESEARCH ARCHIVE</p><h1>千局棋譜圖譜</h1></div><a class="download-link" href="1000-games-images.zip" download>下載 1,000 張棋譜圖 <span aria-hidden="true">↗</span></a></header>
+  <main>
+    <div id="loadError" class="error" hidden></div>
+    <section class="intro"><div><p class="eyebrow">超級井字棋 / 逐步探索</p><h2>沿著棋譜，看看下一手。</h2><p>從已發生的 1,000 局出發，展開其他合法走法。這裡的探索不會寫入訓練資料。</p></div><div class="symbol-key"><span class="circle">○ 奇數手・先手</span><span class="cross">× 偶數手・後手</span><small>顯示 ○ 對應原始 X；顯示 × 對應原始 O。<br>只更換顯示符號，位置、順序與同構計數保持原樣。</small></div></section>
+    <div id="quickStats" class="quick-stats" aria-label="本批資料摘要"></div>
+    <nav class="tabs" aria-label="瀏覽模式"><button class="active" data-view="explore" aria-selected="true">01　逐步探索</button><button data-view="gallery" aria-selected="false">02　千局圖集</button><button data-view="counts" aria-selected="false">03　變化與界限</button></nav>
+    <section id="exploreView" class="view">
+      <div class="game-picker"><label for="gameSelect">選擇棋譜</label><button id="prevGame" aria-label="上一局">←</button><select id="gameSelect"></select><button id="nextGame" aria-label="下一局">→</button><a id="currentImage" href="#" target="_blank" rel="noopener">開啟本局圖片 ↗</a></div>
+      <div class="explorer-layout">
+        <section class="board-panel" aria-label="目前棋盤"><div class="panel-heading"><div><span class="eyebrow" id="gameNumber"></span><h3 id="stepTitle">空盤</h3></div><span id="pathBadge" class="badge"></span></div><p id="turnStatus" class="turn-status" aria-live="polite"></p><div id="board" class="board" role="group" aria-label="超級井字棋盤"></div><div class="board-legend"><span><i class="legal-dot"></i> 可下的位置</span><span><i class="last-dot"></i> 最後一手</span><span>小字為兩位數位置</span></div>
+          <div class="play-controls"><button id="toStart" title="回到空盤">↤</button><button id="stepBack">上一手</button><button id="playPause" aria-label="自動播放或暫停">播放</button><button id="stepNext">下一手</button><button id="toEnd" title="前往這條路徑末端">↦</button></div>
+          <label class="scrub-label" for="stepRange"><span>手數</span><output id="rangeLabel"></output></label><input id="stepRange" type="range" min="0" max="81" value="0"><button id="restoreGame" class="text-button">返回所選的原始棋譜</button><p class="small" id="gameDetails"></p>
+        </section>
+        <section class="tree-panel" aria-label="合法走法樹"><div class="panel-heading"><div><p class="eyebrow">MOVE EXPLORER</p><h3>下一手的分支</h3></div><span id="branchCount" class="badge"></span></div><div class="tree-options"><label><input type="checkbox" id="groupSymmetry" checked> 合併本局面的同構下法</label><label for="branchFilter">顯示 <select id="branchFilter"><option value="all">所有合法下法</option><option value="observed">本批走過的下法</option></select></label></div><p id="sampleStatus" class="small"></p><div id="breadcrumbs" class="breadcrumbs" aria-label="目前探索路徑"></div><div class="tree-root" id="treeRoot"></div><div id="tree" class="tree-scroll"></div><p class="tree-note">點箭頭可往下展開；點「走這一步」切換棋盤。未展開的分支仍可能存在。每個分組依完整局面的 D4 對稱判定，保留各個實際位置。</p></section>
+      </div>
+      <details class="explanation"><summary>怎麼讀這張樹？</summary><p>「本批走過」只計算原始方向下、符合目前整條落子路徑的對局。每組的次數合計該組所有位置；往下展開時，顯示標明的代表位置。未出現在樣本中的合法分支，可以繼續探索，但不是新增的訓練紀錄。</p><p>同構分組只合併目前局面的等價下法。完整棋譜去重仍須對整場套用同一個旋轉或鏡射，不能每一步任意換方向後視為同一局。這個頁面保留你選擇的原始方向與路徑。</p></details>
+    </section>
+    <section id="galleryView" class="view" hidden><div class="section-heading"><div><p class="eyebrow">ONE GAME, ONE IMAGE</p><h2>每一局，都有完整的順序。</h2><p>圖片上的數字就是落子手數。空白格代表整局沒有在該位置落子。</p></div><label>跳至第 <input id="galleryJump" type="number" min="1" max="1000" value="1"> 局 <button id="jumpGallery">前往</button></label></div><div id="galleryGrid" class="gallery-grid"></div><div class="pagination"><button id="galleryPrev">← 前一頁</button><span id="galleryPage"></span><button id="galleryNext">下一頁 →</button></div></section>
+    <section id="countsView" class="view" hidden><div class="section-heading"><div><p class="eyebrow">FINITE, BUT NOT FULLY COUNTED</p><h2>有限的遊戲，尚未求得的總數。</h2><p>先分清楚「一局下了幾手」、「不同棋譜」與「不同局面」。</p></div></div><div class="finite-proof"><span class="proof-number">81</span><div><h3>一局至多 81 手</h3><p>每手必須占用一個新的空格，棋盤共有 81 格，已占用或封閉的位置不能再下；終局後也不能繼續。因此分支深度與每步選擇數都有限，全部合法棋譜和局面數也一定有限。</p><p class="small">81 是保守的上界，並未在此證明可達。樣本最長手數也不是全遊戲的最長手數。</p></div></div><div id="countCards" class="count-cards"></div><section class="histogram-panel"><div class="panel-heading"><h3>這 1,000 局的終局手數</h3><span id="lengthSummary" class="badge"></span></div><div id="histogram" class="histogram" role="img" aria-label="觀察到的終局手數分布"></div><details><summary>查看各手數的精確局數</summary><div class="table-wrap"><table><thead><tr><th>終局手數</th><th>觀察局數</th></tr></thead><tbody id="lengthTable"></tbody></table></div></details></section><div class="scope-note"><h3>全部合法變化究竟有幾種？</h3><p>目前仍未求得精確總數。第一手的 81 個合法位置可合併為 15 個 D4 同構類，這是完整的開局計數；下方列出的棋譜、局面和前綴數則只來自這一批樣本。探索網頁會即時計算當前所有合法下一手，不代表已列舉整棵遊戲樹。</p><p>完整局面含棋盤、行動方、指定盤與規則版本；歷史前綴另保留到達順序。同一局面可能由不同順序到達，因此兩者不能混算，也不能把局面數一律除以八。</p><a href="summary.json" download>下載計數摘要 JSON ↗</a>　<a href="data.json" download>下載原始順序資料 JSON ↗</a></div></section>
+    <footer><span>規則：已贏或已滿的小盤封閉 · 大格三連線立即獲勝</span><span>本機唯讀圖譜 · 原始座標 11–99（兩位各 1–9）</span></footer>
+  </main>
+  <noscript><p>請啟用 JavaScript 以使用互動探索；棋譜 PNG 可以獨立開啟。</p></noscript>
+</body></html>

@@ -1,0 +1,12 @@
+{
+  "name": "uttt-game-atlas-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "離線圖譜的純 DOM 測試依賴；網頁本身無套件相依。",
+  "scripts": {
+    "test": "node ../../tests/game_atlas_ui.cjs"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}
