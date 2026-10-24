@@ -244,6 +244,8 @@ def train_extension(service, source_path, additional=10000, batch_size=100, guar
             service.conn.execute("UPDATE runs SET status='completed' WHERE run_id=?", (run_id,))
             if relative_start + requested == additional:
                 service.conn.execute("UPDATE extension_experiments SET status='completed',completed_at=? WHERE id=1", (now(),))
+        if event:
+            event('after_checkpoint', {'batch_index': i})
         guard.check()
     item = service.repo.one('SELECT * FROM extension_experiments WHERE id=1')
     if check_branch(service, item) != additional or item['status'] != 'completed':
@@ -328,7 +330,7 @@ def export_extension(service, destination, guard):
             partial.unlink()
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, default=Path('data/storage-v3/training-6000.sqlite3'))
     parser.add_argument('--directory', type=Path, default=Path('data/selfplay-16000'))
@@ -336,12 +338,34 @@ def main():
     parser.add_argument('--batch-size', type=int, default=100)
     parser.add_argument('--budget-gb', type=float, default=50)
     parser.add_argument('--min-free-gb', type=float, default=50)
-    args = parser.parse_args()
+    parser.add_argument('--export', choices=('none', 'full'), default='none',
+                        help='預設只保存 SQLite；full 另產生完整 ZIP。完成後也可再指定 full。')
+    args = parser.parse_args(argv)
     directory = args.directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
     guard = StorageBudget(directory, int(args.budget_gb * 10**9), int(args.min_free_gb * 10**9))
     started = time.perf_counter()
     state = {'phase': 'preparing', 'pid': os.getpid(), 'additional_target': args.additional}
+    durations = dict(preparation=0.0, training=0.0, checkpoints=0.0, statistics=0.0,
+                     verification=0.0, export=0.0, database_hash=0.0)
+    invocation_id = uuid.uuid4().hex
+
+    def measured(key, function, *values, **kwargs):
+        tick = time.perf_counter()
+        try:
+            return function(*values, **kwargs)
+        finally:
+            durations[key] += time.perf_counter() - tick
+
+    def export_if_requested(service, report):
+        archive = report.get('export')
+        if archive and file_hash(archive['path']) != archive['sha256']:
+            raise ValueError('既有匯出校驗失敗。')
+        if args.export == 'full' and not archive:
+            status('exporting')
+            archive = measured('export', export_extension, service,
+                directory / ('extension-records-' + uuid.uuid4().hex + '.zip'), guard)
+        return archive
 
     def status(phase, **values):
         state.update(phase=phase, updated_at=now(), **values)
@@ -353,7 +377,7 @@ def main():
         with runner_lock(directory / 'runner.lock'):
             acquired_lock = True
             status('preparing')
-            db = prepare_branch(args.source, directory, args.additional, args.batch_size, guard)
+            db = measured('preparation', prepare_branch, args.source, directory, args.additional, args.batch_size, guard)
             with CompactResearchService(db) as service:
                 item = validate_configuration(service, args.source, args.additional, args.batch_size, guard)
                 state.update(base_games=item['base_version'], total_target=item['target_version'])
@@ -362,12 +386,13 @@ def main():
                     report = json.loads(complete_path.read_text(encoding='utf-8'))
                     if (check_branch(service, item) != args.additional or item['status'] != 'completed'
                             or report['extension_script_sha256'] != script_hash()
-                            or report['source']['base_snapshot_sha256'] != item['base_snapshot_sha256']
-                            or file_hash(report['export']['path']) != report['export']['sha256']):
+                            or report['source']['base_snapshot_sha256'] != item['base_snapshot_sha256']):
                         raise ValueError('既有完成報告與資料不一致。')
+                    report['export'] = export_if_requested(service, report)
+                    save_json(complete_path, report)
                     status('ready', completed_games=item['target_version'], report=str(complete_path))
                     return 0
-                initial = publish_novelty(db, directory, baseline_games=item['base_version'])
+                initial = measured('statistics', publish_novelty, db, directory, baseline_games=item['base_version'])
                 status('training', completed_games=initial['completed_games'])
                 last_statistics = initial['completed_games'] // 1000
 
@@ -375,19 +400,37 @@ def main():
                     nonlocal last_statistics
                     count = item['base_version'] + done
                     if count // 1000 > last_statistics:
-                        publish_novelty(db, directory, baseline_games=item['base_version'])
+                        measured('statistics', publish_novelty, db, directory, baseline_games=item['base_version'])
                         last_statistics = count // 1000
                     if done % 25 == 0 or done == total:
                         status('training', completed_games=count, additional_completed=done,
                                elapsed_seconds=round(time.perf_counter() - started, 1),
                                database_bytes=db.stat().st_size)
 
-                trained = train_extension(service, args.source, args.additional, args.batch_size, guard, progress=progress)
+                checkpoint_started = None
+
+                def event(kind, data):
+                    nonlocal checkpoint_started
+                    if kind == 'before_checkpoint':
+                        checkpoint_started = time.perf_counter()
+                        status('checkpointing', batch_index=data['batch_index'])
+                    elif kind == 'after_checkpoint':
+                        durations['checkpoints'] += time.perf_counter() - checkpoint_started
+                        checkpoint_started = None
+                        status('training')
+
+                statistics_before = durations['statistics']
+                try:
+                    trained = measured('training', train_extension, service, args.source, args.additional,
+                                       args.batch_size, guard, progress=progress, event=event)
+                finally:
+                    if checkpoint_started is not None:
+                        durations['checkpoints'] += time.perf_counter() - checkpoint_started
+                    durations['training'] -= durations['checkpoints'] + durations['statistics'] - statistics_before
                 status('verifying', completed_games=item['target_version'])
-                verified = verify_extension(service)
-                novelty = publish_novelty(db, directory, baseline_games=item['base_version'])
-                status('exporting')
-                archive = export_extension(service, directory / ('extension-records-' + uuid.uuid4().hex + '.zip'), guard)
+                verified = measured('verification', verify_extension, service)
+                novelty = measured('statistics', publish_novelty, db, directory, baseline_games=item['base_version'])
+                archive = export_if_requested(service, {})
                 report = dict(created_at=now(), runtime=runtime_info(), extension_script_sha256=script_hash(),
                     code_hashes=dependency_hashes(), training=trained, verification=verified, export=archive,
                     novelty_summary='novelty-summary.json', novelty_comparison=novelty['comparison_to_last_baseline_block'],
@@ -395,7 +438,8 @@ def main():
                                                 'initial_checkpoint_a', 'initial_checkpoint_b', 'initial_revision_a', 'initial_revision_b')},
                     storage_budget_bytes=guard.budget_bytes, minimum_free_bytes=guard.min_free_bytes,
                     invocation_elapsed_seconds=round(time.perf_counter() - started, 2))
-            report.update(database_bytes=db.stat().st_size, database_sha256=file_hash(db), storage=guard.check())
+            report.update(database_bytes=db.stat().st_size, database_sha256=measured('database_hash', file_hash, db),
+                          storage=guard.check(), invocation_timing_seconds=durations)
             save_json(complete_path, report)
             status('ready', completed_games=item['target_version'], report=str(complete_path))
         return 0
@@ -408,6 +452,12 @@ def main():
         import traceback
         traceback.print_exc()
         return 1
+    finally:
+        if acquired_lock:
+            save_json(directory / ('timing-' + invocation_id + '.json'),
+                      dict(created_at=now(), pid=os.getpid(), seconds=durations,
+                           invocation_elapsed_seconds=time.perf_counter() - started,
+                           final_phase=state['phase']))
 
 
 if __name__ == '__main__':
