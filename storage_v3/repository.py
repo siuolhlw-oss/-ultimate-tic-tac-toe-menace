@@ -16,6 +16,7 @@ from uttt.repository import Repository, SCHEMA
 from uttt.service import ResearchService, dumps
 
 STORAGE_VERSION = 3
+UPDATE_TRIGGER_REVISION = 2
 STATE_COLUMNS = {
     'state_edges': {'from_state_key': 'from_state_id', 'to_state_key': 'to_state_id'},
     'model_states': {'state_key': 'state_id'},
@@ -91,6 +92,54 @@ def write_expression(table, column, prefix, default=None):
     return value
 
 
+def update_triggers(table):
+    """識別欄位未變時不將其列入 SET；真正改鍵仍沿用完整更新及外鍵檢查。"""
+    columns = STRUCTURE[table]
+    keys = [c[1] for c in columns if c[5]]
+    predicate = ' AND '.join(transformed_column(table, key) + ' IS '
+                             + write_expression(table, key, 'OLD') for key in keys)
+    unchanged = ' AND '.join('NEW.' + key + ' IS OLD.' + key for key in keys)
+    triggers = {}
+    for suffix, condition, names in (
+            ('_update', unchanged, [c[1] for c in columns if not c[5]]),
+            ('_update_key', 'NOT (' + unchanged + ')', [c[1] for c in columns])):
+        assignments = ','.join(transformed_column(table, c) + '='
+                               + write_expression(table, c, 'NEW') for c in names)
+        name = table + suffix
+        triggers[name] = ('CREATE TRIGGER ' + name + ' INSTEAD OF UPDATE ON ' + table
+                          + ' WHEN ' + condition + ' BEGIN UPDATE ' + physical_table(table)
+                          + ' SET ' + assignments + ' WHERE ' + predicate + '; END;')
+    return triggers
+
+
+def refresh_update_triggers(connection):
+    """僅更新本程式擁有的更新觸發器，原子處理既有 v3 副本；唯讀入口不呼叫。"""
+    expected = {name: sql for table in sorted(TRANSFORMED)
+                for name, sql in update_triggers(table).items()}
+    revision = dumps({'revision': UPDATE_TRIGGER_REVISION})
+
+    def pending():
+        installed = dict(connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
+        return {name: sql for name, sql in expected.items()
+                if installed.get(name, '').rstrip(';') != sql.rstrip(';')}
+
+    marker = connection.execute("SELECT value_json FROM storage_metadata WHERE key='update_triggers'").fetchone()
+    if not pending() and marker is not None and marker[0] == revision:
+        return
+    connection.execute('BEGIN IMMEDIATE')
+    try:
+        # 取得鎖後重新檢查，避免另一個連線已完成更新。
+        for name, sql in pending().items():
+            connection.execute('DROP TRIGGER IF EXISTS ' + name)
+            connection.execute(sql)
+        connection.execute('INSERT OR REPLACE INTO storage_metadata VALUES(?,?)',
+                           ('update_triggers', revision))
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+
+
 def schema_sql():
     statements = [POOL_SCHEMA]
     for sql in SCHEMA.split(';'):
@@ -160,10 +209,6 @@ def schema_sql():
         statements.append('CREATE TRIGGER IF NOT EXISTS ' + table + '_insert INSTEAD OF INSERT ON '
                           + table + ' BEGIN INSERT INTO ' + physical_table(table) + '('
                           + ','.join(physical_names) + ') VALUES(' + ','.join(insert_values) + '); END;')
-        statements.append('CREATE TRIGGER IF NOT EXISTS ' + table + '_update INSTEAD OF UPDATE ON '
-                          + table + ' BEGIN UPDATE ' + physical_table(table) + ' SET '
-                          + ','.join(transformed_column(table, c) + '=' + write_expression(table, c, 'NEW')
-                                     for c in names) + ' WHERE ' + predicate + '; END;')
         statements.append('CREATE TRIGGER IF NOT EXISTS ' + table + '_delete INSTEAD OF DELETE ON '
                           + table + ' BEGIN DELETE FROM ' + physical_table(table)
                           + ' WHERE ' + predicate + '; END;')
@@ -257,6 +302,7 @@ class CompactRepository(Repository):
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=FULL')
         self.conn.executescript(COMPACT_SCHEMA)
+        refresh_update_triggers(self.conn)
         self.conn.execute('PRAGMA user_version=3')
         self.conn.execute('INSERT OR IGNORE INTO storage_metadata VALUES(?,?)',
                           ('format', dumps({'storage_version': 3, 'logical_schema_version': 2,
