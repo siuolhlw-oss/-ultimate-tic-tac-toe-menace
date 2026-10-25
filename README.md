@@ -55,3 +55,5 @@
 新下載的程式不包含已訓練模型與歷史棋譜。學生網站的 `public/explore/data.js`、`data.json`、`summary.json` 及示例 PNG 是本機產生的匯出檔，也不納入 Git；重建方式見 `tools/export_student_atlas.py`、`tools/document_state_identity.py` 與 `tools/prepare_student_frontend.py`。本機資料與既有網站部署不因建立 Git 版本而變更。
 
 更新研究內容時，以科展說明書主稿為準；修改已確認需求時，同步更新決策紀錄及受影響規格，避免兩份文件互相矛盾。
+
+百萬局精簡模式（R48）：C／D 由 9,000 局接續至累計 1,000,000，保留最新模型、逐局摘要、固定萬局評估及大型里程碑，不保存新增逐手歷程。這是獨立 v4 儲存入口，不能直接交給原 v3 Streamlit／重播工具。於此分支執行 `powershell -File .\million.ps1 Status` 查看進度；其他動作為 `Start`、`Stop`、`Resume`。資料庫及原始紀錄保持本機，詳見 [百萬局精簡儲存與續訓](百萬局精簡儲存與續訓.md)。
