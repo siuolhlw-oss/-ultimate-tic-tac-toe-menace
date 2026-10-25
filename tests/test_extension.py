@@ -139,7 +139,7 @@ class ExtensionTests(unittest.TestCase):
     def test_cli_completes_verification_export_statistics_and_rerun(self):
         command = [sys.executable, '-X', 'utf8', str(Path(extension.__file__).resolve()),
                    '--source', str(self.source), '--directory', str(self.directory),
-                   '--additional', '4', '--batch-size', '2', '--budget-gb', '2', '--min-free-gb', '0']
+                   '--additional', '4', '--batch-size', '2', '--budget-gb', '2', '--min-free-gb', '0', '--export', 'full']
         for _ in range(2):
             result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
